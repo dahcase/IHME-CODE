@@ -21,7 +21,7 @@
 	//set locals
 	local workdir "J:/temp/dccasey/Alcohol/catsofdrinkes/"
 	
-	log using "`workdir'\whs_alc_prev_extract.log", replace
+	log using "`workdir'whs_alc_prev_extract.log", replace
 // load survey subroutines
 	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_extract.ado"
 	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_encode.ado"
@@ -33,7 +33,7 @@
 *************************************************************************
 ***							EXTRACT DATASET						   ***
 *************************************************************************
-/*
+
 // extract data
 	svy_extract, ///
 	dirlist(J:/DATA/WHO_WHS) use_file(INDIV) skip_subdir(CRUDE) subdirs /// 
@@ -74,7 +74,7 @@
 	sort file iso3 year_start year_end labels psu strata sex age
 	
 	save "`workdir'/combined_alc_prev_data.dta", replace
-*/
+
 *************************************************************************
 ***							TABULATE DATASET						   ***
 *************************************************************************
@@ -297,6 +297,7 @@ foreach fff of local thefiles {
 use `master', clear
 
 save "`workdir'/combined_alc_cat_data.dta", replace
+
 use "`workdir'/combined_alc_cat_data.dta", clear
 
 // ever_drinker lifetime_abstainer current_drinker_wk ever_binge
@@ -309,169 +310,6 @@ foreach vartype of varlist b_* v_* n_* {
 	local lastchar = substr("`vartype'", strlen("`vartype'"),.)
 	local firstchar = substr("`vartype'", 1,1)
 	
-	*rename `vartype' ``firstchar''_`lastchar'
-	
+	rename `vartype' ``firstchar''_`lastchar'
 }
-
-qui{
-/*	
-
-// tabulate mean drinks among people who drank in last week
-	clear
-	gen year_start=0
-	gen year_end=0
-	gen iso3= "TEST"
-	gen total_drinks_mean = -123
-	gen total_drinks_se = -123
-	gen age_group="hold"
-	gen sex=3
-	gen case=1
-	gen total_drinks_sample = 123
-//	gen path=""
-	tempfile mean_drinks
-	save `mean_drinks', replace
-	
-	
-	use "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\complete_with_demographics.dta", clear
-	cap drop miss
-	egen miss = rowmiss(q4011 q4012 q4013 q4014 q4015 q4016 q4017)
-	drop if miss == 7
-	cap drop total_drinks
-	egen total_drinks = rowtotal(q4011 q4012 q4013 q4014 q4015 q4016 q4017)
-	
-	//CONVERT TO GRAMS PER DAY
-	replace total_drinks=(total_drinks*10)/7
-	
-	// generate age_groups
-	cap gen age_group = "80-100" if age >= 80
-	forvalues i = 0(5)75 {
-		replace age_group = "`i'-`=`i'+5'" if age >= `i' & age < `=`i'+5'
-	}
-	
-	local probisos ARE BIH COM MLI MRT PAK SEN SWZ
-	foreach iso of local probisos {
-		forvalues i = 0(15)65 {
-			replace age_group = "`i'-`=`i'+15'" if age >= `i' & age < `=`i'+15' &iso3=="`iso'"
-		}
-	}
-	
-	drop age
-	
-	//use this switch to toggle include people who had no drinks in the last week
-	drop if total_drinks==0
-	
-	
-	//testing
-	//keep if year_start==2002 & iso3=="PRY"
-	
-	//Create a unique rowid per survey
-	bysort file: gen caseid=_n
-	
-	//generate values for missing survey parts
-	replace psu =caseid if psu==.
-	replace pweight =1 if pweight==.
-	replace strata =0 if strata==.
-	
-	//Fill in missing survey parts
-	local iter 2
-*
-	qui levelsof file, local(files)
-	foreach file of local files {
-		di "THIS FILE IS `file'"
-		levelsof sex, local(sexes)
-		
-		foreach sss of local sexes {
-			qui levelsof age_group if file=="`file'" & sex==`sss', local(ages)
-			
-			foreach agegrp of local ages {
-				preserve
-				keep if file=="`file'" & sex==`sss'
-				di "dropping file and sex"
-				keep if age_group=="`agegrp'"
-				di "dropping age group"
-				if _N>0 {
-				
-					//Create Franken strata: the logic according to Grant is below
-					// First, we have to combine strata if there are ones with data that only have one psu per strata
-					// If there are multiple strata with only one psu, we'll combine them together
-					// If there is only one strata that has one psu, we'll combine it with a random other strata -- note by Daniel: I drop it, because I'm tired of this nonsense
-					// We reset the psu so that our psus from different strata don't mix when strata are re-assigned.
-					di "RUNNING sex: `sss' agegrp: `agegrp'"
-					qui levelsof strata, local(thestratas)
-					local lonelystrata
-					foreach stratum of local thestratas {
-						qui levelsof psu if strata==`stratum', local(psus)
-						local numpsus : list sizeof psus
-						di "THERE ARE `numpsus' psus in strata `stratum'"
-						
-						//catch the strata that only have 1 psu
-						if `numpsus'==1 {
-							local lonelystrata `lonelystrata' `stratum'
-						}
-					}
-					di "the lonely strata are `lonelystrata'"
-					local numlone: list sizeof lonelystrata
-					di "Number of lonely strata is `numlone' _"
-					
-					if `numlone' > 1 {
-						foreach lonestrat of local lonelystrata {
-							replace psu=caseid if strata==`lonestrat' //make sure the PSUs of the new strata don't overlap
-							replace strata=0 if strata==`lonestrat' //set obs to the combined strata
-						}
-					}
-					else if `numlone'==1{
-						drop if strata==`lonelystrata'
-					}
-					if _N > 0 { //incase there are no cases after of the pareing down
-						levelsof iso3, local(iso)
-						levelsof year_start, local(startyear)
-						levelsof year_end, local(endyear)
-						
-						di "RUNNING sex: `sss' agegrp: `agegrp' iso:" `iso'
-					
-						svyset psu [pweight=pweight], strata(strata)
-						svy: mean total_drinks
-						
-						//get mean, n and se
-						//set trace on
-						mat b=e(b)
-						mat v=e(V)
-						mat n=e(_N)
-						local svyn = n[1,1]
-						local svyest = b[1,1]
-						local svyse = sqrt(v[1,1])
-						
-						use `mean_drinks', clear
-						set obs `iter'
-						
-						replace case=_n
-						replace year_start=`startyear' if(case==`iter')
-						replace year_end=`endyear' if(case==`iter')
-						replace iso3= `iso' if(case==`iter')
-						replace total_drinks_mean = `svyest' if(case==`iter')
-						replace total_drinks_se = `svyse' if(case==`iter')
-						replace age_group= "`agegrp'" if(case==`iter')
-						replace sex=`sss' if(case==`iter')	
-						replace total_drinks_sample =`svyn' if(case==`iter')
-						//replace path= "J:/DATA/WHO_WHS/"`iso' if(case==`iter')
-						save `mean_drinks', replace
-						local iter = `iter'+1
-					}
-				}
-				restore
-			}
-		}	
-	}
-	use `mean_drinks', clear
-	drop if case==1
-	//Rename the variables to match what they represent. This is done at the end to prevent any
-	//errors from popping up in the actual processing of the code which was written for total_drinks
-	rename total_drinks_mean gramsperday_mean
-	rename total_drinks_se gramsperday_se
-	rename total_drinks_sample	gramsperday_sample
-	
-	save "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\whsgramsperday.dta",replace
-	
-	cap log close
-	*/
-}
+save "`workdir'/combined_alc_cat_data_newname.dta", replace
