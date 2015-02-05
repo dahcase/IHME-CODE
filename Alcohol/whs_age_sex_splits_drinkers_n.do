@@ -1,6 +1,8 @@
 
 // prep stata
 	clear all
+	tempfile data
+	save `data', emptyok replace
 	set more off
 	set maxvar 32000
 	pause on
@@ -13,10 +15,6 @@
 	}
 	global dsn = "epi"
 	cap log close
-	
-	local folder 
-	
-	
 	log using "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\whs_process.log", replace
 // load survey subroutines
 	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_extract.ado"
@@ -27,7 +25,7 @@
 *************************************************************************
 ***							EXTRACT DATASET						   ***
 *************************************************************************
-
+/*
 // extract data
 	svy_extract, ///
 	dirlist(J:/DATA/WHO_WHS) use_file(INDIV) skip_subdir(CRUDE) subdirs /// 
@@ -69,7 +67,7 @@
 	sort file iso3 year_start year_end labels psu strata sex age
 	
 	save "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\complete_with_demographics.dta", replace
-
+*/
 *************************************************************************
 ***							TABULATE DATASET						   ***
 *************************************************************************
@@ -85,7 +83,8 @@
 	//CONVERT TO GRAMS PER DAY
 	replace total_drinks=(total_drinks*10)/7
 	
-	// generate age_groups
+	// generate age_groups-- dothis quietly
+	qui {
 	//Now begin the processing phase-- starting with defining age_groups
 	gen age_group = "80-100" if age>=80
 	forvalues i =0(5)75 {
@@ -102,21 +101,23 @@
 			replace age_group = "`i'-`=`i'+10'" if age >= `i' & age < `=`i'+10' &iso3=="`iso'"
 		}
 	}
+	}
 	drop age
 	
-	keep file iso3 year_start year_end psu strata pweight sex total_drinks age_group
+	keep file iso3 year_start year_end psu strata pweight sex total_drinks age_group miss
 	gen case_id = _n
 	
 	//drop any case missing a strata, psu or pweight
 	drop if strata==. | psu==. | pweight==.
 	
-	//remember to limit by miss !=7 &total_drinks !=0
+	encode age_group, gen(agegroup_encode)
 	
 	//find the average grams per day for each file
 	levelsof file, local(thefiles)
 	foreach fff of local thefiles {
 		preserve
 		keep if file=="`fff'"
+		di "FILE IS `fff'"
 		
 		//fix the lonely psu problem. 
 		//Create Franken strata: the logic according to Grant is below
@@ -133,7 +134,8 @@
 		tostring strata, gen(strata_old)
 		drop strata
 		encode strata, gen(strata)
-		
+		/*
+		*set trace on
 		//find strata that only have one psu
 		local lonelystrat
 		levelsof strata, local(thestrata)
@@ -147,10 +149,11 @@
 		}
 		
 		//now that we have the lonely strata, assign those psus to the same strata
-		local numlone = list sizeof lonelystrat
-		tostring psu, gen(txtpsu)
+		local numlone : list sizeof lonelystrat
+		*tostring psu, gen(txtpsu)
 		if `numlone'>1 {
-			local iter -1
+			di "Creating Frankenstrata"
+			local iter = -1
 			foreach lstrat of local lonelystrat {
 				//alter psu so that it won't effect the strata merge
 				//use a negative iterator to change the psu-- it won't hurt anything because
@@ -158,34 +161,102 @@
 				//will not alter the structure
 				replace psu = `iter' if strata==`lstrat'
 				local iter = `iter'-1
-				replace strata = -1 if strata= `lstrat' //create the frankenstrat
+				replace strata=-1 if strata== `lstrat' //set all the lonely strata to the same value
 			}
 		}
 		
-		if `numalone'==1 {
-			local strats : thestrata - lonelystrat
-			tokenize strats
-			local stratsize = list sizeof strats
-			local newstrat = 1+int((`stratsize'-2)*runiform())
+		else if `numlone'==1  {
+			di "Randomly assigning lost strata (`lonelystrat')"
+			local estrata : list thestrata - lonelystrat
+			*di "`thestrata' ; `lonelystrat'; `estrata'"
+			
+			local numelig : list sizeof estrata
+			tokenize `estrata'			
+			local randomselect = 1+int((`numelig'+2)*runiform())			
+			replace strata = ``randomselect'' if strata==`lonelystrat'
+			
+			di "Lost strata `lonelystrat' is now assigned to ``randomselect''"
+			
+			
+			
+		}
+		*/
+		*set trace off
+		
+		//now that the lonelypsu/lonelystrat problem has be dealt with (fingers cross), run subop analysis
+		
+		//set the survey parameters
+		svyset psu [pweight=pweight], strata(strata) singleunit(centered)
+		
+		
+		//Get the mean consumption
+		//remember to limit by miss !=7 &total_drinks !=0
+		svy: mean total_drinks if(total_drinks !=0 & miss !=7), over(sex agegroup_encode)
+		mat b=e(b)'
+		mat v=vecdiag((e(V)))' //the transformation from variance into se occurs below
+		mat n=e(_N)'
+		local labels = e(over_labels)
+		*mat l = e(over_labels)
+		*mat testy = e(over_namelist)
+		
+		//get some values  before we drop them
+		levelsof year_start, local(styear)
+		levelsof year_end, local (endyear)
+		levelsof iso3, local(theiso)
+		
+		
+		clear
+		svmat b, names(b_)
+		svmat v, names(v_)
+		svmat n, names(n_)
+		
+		gen subpop=""
+		gen case = _n
+		local iter 1
+		foreach lbl of local labels {
+			replace subpop="`lbl'" if case==`iter'
+			local iter = `iter' +1
 		}
 		
+		//convert from variance to se
+		replace v_1 = sqrt(v_1)
+		
+		//Fix up the datasheet a little bit before moving onto the next file
+		gen sex = substr(subpop, 1, 1)
+		destring sex, replace
+		
+		gen age_group = substr(subpop, 3,.)
+		drop subpop
+		
+
+		local iso `theiso'
+		local endyear `endyear'
+		local styear `styear'
+		
+		gen year_start = `styear'
+		gen year_end = `endyear'
+		gen iso3 = "`iso'"
+		
+		//fix the column names
+		rename b_1 gramsperday_mean
+		
+		//convert from variance to se
+		replace v_1 = sqrt(v_1)
+		rename v_1 gramsperday_se
+		rename n_1 gramsperday_sample
+		
+		append using `data'
+		save `data', replace
+		
 		restore
-		dsaf
 	}
 	
-	
-	
-	
-	asdf
-	
-	
+	use `data', clear
 	//Rename the variables to match what they represent. This is done at the end to prevent any
 	//errors from popping up in the actual processing of the code which was written for total_drinks
-	rename total_drinks_mean gramsperday_mean
-	rename total_drinks_se gramsperday_se
-	rename total_drinks_sample	gramsperday_sample
+
 	
-	save "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\whsgramsperday.dta",replace
+	save "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\whsgramsperday_2.dta",replace
 	
 	cap log close
 	

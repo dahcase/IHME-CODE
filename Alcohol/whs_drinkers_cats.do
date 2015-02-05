@@ -1,6 +1,8 @@
 
 // prep stata
 	clear all
+	tempfile data
+	save `data', emptyok replace
 	set more off
 	set maxvar 32000
 	pause on
@@ -13,10 +15,6 @@
 	}
 	global dsn = "epi"
 	cap log close
-	
-	local folder 
-	
-	
 	log using "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\whs_process.log", replace
 // load survey subroutines
 	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_extract.ado"
@@ -27,7 +25,7 @@
 *************************************************************************
 ***							EXTRACT DATASET						   ***
 *************************************************************************
-
+/*
 // extract data
 	svy_extract, ///
 	dirlist(J:/DATA/WHO_WHS) use_file(INDIV) skip_subdir(CRUDE) subdirs /// 
@@ -69,7 +67,7 @@
 	sort file iso3 year_start year_end labels psu strata sex age
 	
 	save "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\complete_with_demographics.dta", replace
-
+*/
 *************************************************************************
 ***							TABULATE DATASET						   ***
 *************************************************************************
@@ -82,10 +80,45 @@
 	cap drop total_drinks
 	egen total_drinks = rowtotal(q4011 q4012 q4013 q4014 q4015 q4016 q4017)
 	
-	//CONVERT TO GRAMS PER DAY
-	replace total_drinks=(total_drinks*10)/7
+	//ever drink: Question wording is roughly: Have you ever consumed a drink that contains alcohol?, 1 yes, 5 no
+	gen ever_drinker=0
+	replace ever_drinker = 1 if q4010==1
+
+
+	//abstainer the reverse of ever_drink
+	gen lifetime_abstainer = 0
+	replace lifetime_abstainer =1 if q4010==5
+
+	//there looks like the is some inputation funkiness going on. For example, respondents will say they are a lifetime abstainer
+	//but have values on the showcard answers. Because the instructions from the documentation suggest that if q4010==5, don't go
+	//on to the showcard. This next block of code overwrites showcard response if they should have been a lifetime abstainer
+	foreach var of varlist q4011 q4012 q4013 q4014 q4015 q4016 q4017 {
+		replace `var'=0 if q4010==5
+	}
+
+
+	gen binge_times =0
+	//find the number of times a respondent binge drank
+	foreach var of varlist q4011 q4012 q4013 q4014 q4015 q4016 q4017 {
+		//While we are here set missing drink days to zero. Not the worst assumption in the world, but probably worth rechecking in the future
+		replace `var'=0 if `var'==.
+		replace binge_times= binge_times+1 if `var'>= 5 & sex==2 //48 g/day for females ~ 5 drinks
+		replace binge_times=binge_times+1 if `var'>=6 & sex==1 // 60 g/day for males ~6 drinks
+		
+	}
+
+	//maximum number of drinks for one day in the last week
+	egen maxdrink= rowmax(q4011 q4012 q4013 q4014 q4015 q4016 q4017)
+	gen current_drinker_wk = 0
+	replace current_drinker_wk=1 if maxdrink>0
+
+	//Ever binge drank in the last week
+	gen ever_binge=0
+	replace ever_binge = 1 if binge_times>0
 	
-	// generate age_groups
+	
+	// generate age_groups-- dothis quietly
+	qui {
 	//Now begin the processing phase-- starting with defining age_groups
 	gen age_group = "80-100" if age>=80
 	forvalues i =0(5)75 {
@@ -102,90 +135,104 @@
 			replace age_group = "`i'-`=`i'+10'" if age >= `i' & age < `=`i'+10' &iso3=="`iso'"
 		}
 	}
+	}
 	drop age
 	
-	keep file iso3 year_start year_end psu strata pweight sex total_drinks age_group
+	keep file iso3 year_start year_end psu strata pweight sex ever_drinker lifetime_abstainer ever_binge current_drinker_wk age_group miss // do binge_times seperately, because its only relevant for bingers
 	gen case_id = _n
 	
 	//drop any case missing a strata, psu or pweight
 	drop if strata==. | psu==. | pweight==.
 	
-	//remember to limit by miss !=7 &total_drinks !=0
+	encode age_group, gen(agegroup_encode)
 	
 	//find the average grams per day for each file
-	levelsof file, local(thefiles)
+
+levelsof file, local(thefiles)
+//encode psu and strata so we don't get any funkiness
+tostring psu, gen(psu_old)
+drop psu
+encode psu_old, gen(psu)
+	
+tostring strata, gen(strata_old)
+drop strata
+encode strata, gen(strata)
+tempfile info
+save `info', replace
+local varsofinterest ever_drinker lifetime_abstainer ever_binge current_drinker_wk
+foreach interest of local varsofinterest {
 	foreach fff of local thefiles {
+
 		preserve
 		keep if file=="`fff'"
+		di "FILE IS `fff'"
+
+		//set the survey parameters
+		svyset psu [pweight=pweight], strata(strata) singleunit(centered)
 		
-		//fix the lonely psu problem. 
-		//Create Franken strata: the logic according to Grant is below
-		// First, we have to combine strata if there are ones with data that only have one psu per strata
-		// If there are multiple strata with only one psu, we'll combine them together
-		// If there is only one strata that has one psu, we'll combine it with a random other strata
-		// We reset the psu so that our psus from different strata don't mix when strata are re-assigned.
+		//Get the mean consumption
+		//remember to limit by miss !=7 &total_drinks !=0
+		svy: mean `interest', over(sex agegroup_encode)
+		mat b=e(b)'
+		mat v=vecdiag((e(V)))' //the transformation from variance into se occurs below
+		mat n=e(_N)'
+		local labels = e(over_labels)
 		
-		//encode psu and strata so we don't get any funkiness
-		tostring psu, gen(psu_old)
-		drop psu
-		encode psu_old, gen(psu)
+		//get some values  before we drop them
+		levelsof year_start, local(styear)
+		levelsof year_end, local (endyear)
+		levelsof iso3, local(theiso)
 		
-		tostring strata, gen(strata_old)
-		drop strata
-		encode strata, gen(strata)
 		
-		//find strata that only have one psu
-		local lonelystrat
-		levelsof strata, local(thestrata)
-		foreach stratum of local thestrata {
-			levelsof psu if strata==`stratum', local(psus)
-			local numpsus : list sizeof psus
-			
-			if `numpsus' ==1{
-				local lonelystrat `lonelystrat' `stratum'
-			}
+		clear
+		svmat b, names(b_)
+		svmat v, names(v_)
+		svmat n, names(n_)
+		
+		gen subpop=""
+		gen case = _n
+		local iter 1
+		foreach lbl of local labels {
+			replace subpop="`lbl'" if case==`iter'
+			local iter = `iter' +1
 		}
 		
-		//now that we have the lonely strata, assign those psus to the same strata
-		local numlone = list sizeof lonelystrat
-		tostring psu, gen(txtpsu)
-		if `numlone'>1 {
-			local iter -1
-			foreach lstrat of local lonelystrat {
-				//alter psu so that it won't effect the strata merge
-				//use a negative iterator to change the psu-- it won't hurt anything because
-				//there is only one psu in the strata so changing the psu using the strata as an if
-				//will not alter the structure
-				replace psu = `iter' if strata==`lstrat'
-				local iter = `iter'-1
-				replace strata = -1 if strata= `lstrat' //create the frankenstrat
-			}
-		}
 		
-		if `numalone'==1 {
-			local strats : thestrata - lonelystrat
-			tokenize strats
-			local stratsize = list sizeof strats
-			local newstrat = 1+int((`stratsize'-2)*runiform())
-		}
+		//Fix up the datasheet a little bit before moving onto the next file
+		gen sex = substr(subpop, 1, 1)
+		destring sex, replace
+		
+		gen age_group = substr(subpop, 3,.)
+		drop subpop
+		
+
+		local iso `theiso'
+		local endyear `endyear'
+		local styear `styear'
+		
+		gen year_start = `styear'
+		gen year_end = `endyear'
+		gen iso3 = "`iso'"
+		
+		append using `data'
+		save `data', replace
 		
 		restore
-		dsaf
 	}
 	
-	
-	
-	
-	asdf
-	
-	
+	use `data', clear
 	//Rename the variables to match what they represent. This is done at the end to prevent any
 	//errors from popping up in the actual processing of the code which was written for total_drinks
-	rename total_drinks_mean gramsperday_mean
-	rename total_drinks_se gramsperday_se
-	rename total_drinks_sample	gramsperday_sample
 	
-	save "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\whsgramsperday.dta",replace
+	replace v_1 = sqrt(v_1) //transform variance into SE
 	
+	rename b_1 `interest'_prop
+	rename v_1 `interest'_se
+	rename n_1 `interest'_sample
+	save "J:\temp\dccasey\Alcohol\catsofdrinkes\whs_`interest'.dta",replace
+	clear
+	save `data', replace emptyok
+	use `info', clear
+}
 	cap log close
 	
