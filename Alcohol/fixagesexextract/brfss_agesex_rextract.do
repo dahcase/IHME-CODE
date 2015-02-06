@@ -16,38 +16,31 @@
 	global dsn = "epi"
 	cap log close
 	log using "J:\temp\dccasey\Alcohol\AgeSplits\WHS_redo\whs_process.log", replace
-// load survey subroutines
-	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_extract.ado"
-	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_encode.ado"
-	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\dev\svy_subpop.ado"
-	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_svyset.ado"
 	
+//load data into one joint dataset
+	local datafiles : dir "J:\temp\dccasey\Alcohol\AgeSplits\BRFSS/" files "complete*.dta"
+
+	foreach df of local datafiles {
+		append using "J:\temp\dccasey\Alcohol\AgeSplits\BRFSS/`df'"
+	}
+
+	di _N
 	
-	use "J:\temp\dccasey\Alcohol\AgeSplits\HSE\hse_complete_with_demographics.dta", clear
+	// generate age_group
+	//Now begin the processing phase-- starting with defining age_groups
+	gen age_group = "80-100" if age>=80
+	forvalues i =0(5)75 {
+		local j = `i' +5
+		replace age_group = "`i'-`=`i'+5'" if age >= `i' & age < `=`i'+5'
+	}
+	encode age_group, gen(age_group_enc)
 
 	drop age
-	
 	//drop any case missing a strata, psu or pweight
-	replace psu=area if psu==.
 	drop if strata==. | psu==. | pweight==.
-	
-	keep region file year psu strata pweight sex age_group gperday
-	gen case_id = _n
-	
-	//find the average grams per day for each file
 
+	//generate the list we will iterate over
 	levelsof file, local(thefiles)
-	//encode psu and strata so we don't get any funkiness
-	tostring psu, gen(psu_old)
-	drop psu
-	encode psu_old, gen(psu)
-		
-	tostring strata, gen(strata_old)
-	drop strata
-	encode strata, gen(strata)
-	tempfile info
-	save `info', replace
-
 	local varsofinterest gperday
 	foreach interest of local varsofinterest {
 		foreach fff of local thefiles {
@@ -58,16 +51,16 @@
 			//set the survey parameters
 			svyset psu [pweight=pweight], strata(strata) singleunit(centered)
 			
-			//Get the mean consumption
-			//remember to limit by miss !=7 &total_drinks !=0
-			svy: mean `interest', over(sex age_group region)
+			//Get the mean consumption of drinkers
+			svy: mean `interest' if (gperday>0 & gperday!=.), over(sex age_group_enc)
 			mat b=e(b)'
 			mat v=vecdiag((e(V)))' //the transformation from variance into se occurs below
 			mat n=e(_N)'
 			local labels = e(over_labels)
 			
 			//get some values  before we drop them
-			levelsof year, local(year)
+			levelsof year_start, local(syear)
+			levelsof year_end, local(eyear)
 			
 			
 			clear
@@ -93,15 +86,13 @@
 			
 			rename subpop2 age_group
 			
-			egen region = concat(subpop*), punct(" ")
-			
-			local endyear `year'
-			local styear `year'
+			local endyear `eyear'
+			local styear `syear'
 			
 			gen file = "`fff'"
 			gen year_start = `styear'
 			gen year_end = `endyear'
-			drop subpop*
+			cap drop subpop*
 			append using `data'
 			save `data', replace
 			
@@ -113,16 +104,16 @@
 		//errors from popping up in the actual processing of the code which was written for total_drinks
 		replace v_1 = sqrt(v_1) //transform variance into SE
 		
-		rename b_1 `interest'_prop
+		rename b_1 `interest'_mean
 		rename v_1 `interest'_se
 		rename n_1 `interest'_sample
-		save "J:\temp\dccasey\Alcohol\AgeSplits\HSE\hse_`interest'.dta",replace
+		save "J:\temp\dccasey\Alcohol\AgeSplits\BRFSS/brfss_re_`interest'.dta",replace
 		clear
 		save `data', replace emptyok
 		use `info', clear
 		local last `interest'
 	}
-	use "J:\temp\dccasey\Alcohol\AgeSplits\HSE\hse_`last'.dta", clear
+	use "J:\temp\dccasey\Alcohol\AgeSplits\BRFSS/brfss_re_`last'.dta", clear
 
 
 	cap log close
