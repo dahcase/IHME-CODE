@@ -1,0 +1,112 @@
+
+. 
+. cap mkdir "`workdir'`p_country'/"
+
+. cap mkdir "`workdir'`p_country'/`p_country'_`p_year'/"
+
+. cap mkdir "`workdir'`p_country'/`p_country'_`p_year'"
+
+. cap mkdir "`workdir'`p_country'/`p_country'_`p_year'/`p_type'"
+
+. *cap mkdir "`workdir'`p_country'/`p_country'_`p_year'/`p_type'/abcform"
+. *cap mkdir "`workdir'`p_country'/`p_country'_`p_year'/`p_type'/agg"
+. *cap mkdir "`workdir'`p_country'/`p_country'_`p_year'/`p_type'/med_pafs"
+. 
+. 
+. 
+. **************************************
+. **********Open Summary File***********
+. **************************************
+. //This summary file is either the mortality or morbidity one
+. use "`sumdir'`sumfile'", replace
+invalid file specification
+r(198);
+
+end of do-file
+
+r(198);
+
+. do "J:\WORK\05_RISK\OTHER\VENN\CODE\V1\vd_p1_launcher.do"
+
+. *Daniel Casey
+. *12-10-14
+. *Launcher script for the Venn Diagram/Mediation Creator
+. // Set preferences for STATA
+. // Clear memory and set memory and variable limits
+. clear all
+
+. macro drop _all
+
+. set maxvar 32000
+
+
+. // Set to run all selected code without pausing
+. set more off
+
+. // Remove previous restores
+. cap restore, not
+
+. // Define J drive (data) for cluster (UNIX) and Windows (Windows)
+. if c(os) == "Unix" {
+.         global prefix "/home/j"
+.         set odbcmgr unixodbc
+. }
+
+. else if c(os) == "Windows" {
+.         global prefix "J:"
+. }
+
+. 
+. ********************************************************************************
+. *Stage 0: Declare locals to act as switches and that otherwise govern the
+. *running of the program
+. ********************************************************************************
+. *Things that need to be set independantly
+. local dalynatversion 47 //version of the dalynator
+
+. local vdversion 0 //version of the venn diagram
+
+. local codeversion 1 //version of the code
+
+. local medversion 1 //version of the mediation
+
+. local instruction Yest //foreach stage, say whether you want to run this part (e.g. a y or n in the appropriate part)
+
+. 
+. *Contraints
+. local location USA //if you want to constrain the run by country(s) replace all with the iso3 codes.
+
+.                           //For subnational units, this will have to work in a different way. Instead, supply
+.                           //the iso of the parent country the three letter code that identifies the subnational
+.                           //unit. Remove all if you don't want to run all
+. local years 2013 //contrain the years that the process runs.
+
+. 
+. *Derived switches
+. local sumdirectory "J:/WORK/10_gbd/01_dalynator/03_results/`dalynatversion'/summary/" //location of the summary files. Inf
+> ormed by dalynat version
+
+. local workdirectory "J:/WORK/05_risk/other/venn/results/v`vdversion'" //location of where to spit the files, informed by v
+> d version
+
+. local codedirectory "J:/WORK/05_risk/other/venn/Code/" //where to look for the relevant code
+
+. 
+. *Generate the file directory network
+. cap mkdir "`workdirectory'"
+
+. cap mkdir "`workdirectory'/decomp"
+
+. cap mkdir "`workdirectory'/vdviztool"
+
+. cap mkdir "`workdirectory'/dimensions"
+
+. cap mkdir "`workdirectory'/logfiles"
+
+. 
+. ********************************************************************************
+. *Stage 1: Launch the jobs to be processed. In this case, launch a job by country-year
+. *summary file provided by the dalynator output
+. ********************************************************************************
+. *Start logging
+. cap log close 

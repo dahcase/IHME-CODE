@@ -1,0 +1,26 @@
+clear all
+set more off
+** Set directories
+	if c(os) == "Windows" {
+		global j "J:"
+		*set mem 1g
+	}
+	if c(os) == "Unix" {
+		global j "/home/j"
+		*set mem 2g
+		set odbcmgr unixodbc
+	}
+
+	
+local folder "$j/WORK/05_risk/other/venn/Mediation/"
+use "$j/WORK/05_risk/temp/mediation/all mediations.dta", clear
+
+replace risk = risk_orig
+drop if risk=="air_hap" & acause=="cvd_ihd"
+
+expand 2 if risk=="air_pm" & acause=="cvd_ihd", gen(dup)
+replace risk="air_hap" if dup==1
+
+order acause risk med_
+sort acause risk med_
+

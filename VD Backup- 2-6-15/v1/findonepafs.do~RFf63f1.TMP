@@ -1,0 +1,53 @@
+clear all
+set more off
+use "j:/temp/stan/paf_all_attrib_01_16_15_formatted.dta", clear
+
+gen drawmeanyld = 1
+gen drawmeanyll = 1
+drop draw_yld* draw_yll*
+
+//hard fix for hypertension
+replace risk="metab" if risk=="metab_sbp" & acause=="cvd_htn"
+
+//keep on the level 2 aggregations
+keep if risk=="_behav" | risk =="metab" | risk== "_env"
+replace risk="beh" if risk=="_behav"
+
+preserve
+use "J:/WORK/00_dimensions/03_causes/causes.dta", clear
+keep if cause_version==2 & reporting==1
+tempfile causelist
+save `causelist', replace
+restore
+
+merge m:1 acause using `causelist', keepusing(cause) nogen keep (3)
+
+
+
+//expand females by 1 so sex ==3 works as well
+expand = 2 if sex==2, gen(dup)
+replace sex=3 if dup==1
+
+//now expand by age groups
+drop dup
+expand 8 if age==50, gen(dup)
+bysort acause sex year risk age: gen dup2 = cond(_N==1, 0, _n)
+
+replace age= 91 if dup2==1
+replace age= 92 if dup2==2
+replace age= 93 if dup2==3
+replace age= 94 if dup2==4
+replace age= 97 if dup2==5
+replace age= 98 if dup2==6
+replace age= 99 if dup2==7
+drop dup2
+expand 8 if age==.1, gen(dup)
+bysort acause sex year risk age: gen dup2 = cond(_N==1, 0, _n)
+
+//now drop for special cases
+
+drop if (acause=="nutrition_pem" & risk=="nutrition_underweight") & (age>90 & age !=94)
+*drop if risk=="nutrition_underweight" & (age>90 & age !=94)
+
+tostring age, replace
+save "J:\WORK\05_risk\other\venn\pafsone\pafsone.dta", replace
