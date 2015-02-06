@@ -22,9 +22,15 @@
 	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\dev\svy_subpop.ado"
 	run "J:\WORK\04_epi\01_database\01_code\02_central\01_code\prod\adofiles\svy_svyset.ado"
 	
+	//rextraction
+	use "J:\WORK\04_epi\01_database\01_code\02_central\05_extract\02_series\HSE\04_outputs/master_HSE_2014_01_22.dta", clear
 	
-	use "J:\temp\dccasey\Alcohol\AgeSplits\HSE\hse_complete_with_demographics.dta", clear
-
+	keep file iso3 year_start year_end aevrdrnk age alwaystt area beforett child_wt cluster dalwaytt ddrink ddrinkan ddrinkof dnany dnevr dnnow drating drink drinkany drinke drnkstat gor hhld_wt int_wt psu sex totalwu wt_hhld wt_int
+	sum year*
+	keep if year_start <=2002 | year_start==2011
+	
+	
+	
 	drop age
 	
 	//drop any case missing a strata, psu or pweight
@@ -111,6 +117,7 @@
 		use `data', clear
 		//Rename the variables to match what they represent. This is done at the end to prevent any
 		//errors from popping up in the actual processing of the code which was written for total_drinks
+		rrtert
 		replace v_1 = sqrt(v_1) //transform variance into SE
 		
 		rename b_1 `interest'_prop
